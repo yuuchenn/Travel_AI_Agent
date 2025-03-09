@@ -11,7 +11,7 @@ python gpu_worker.py
 - Dockerfile : travel_agent
 - Docker-compose.yml 
 
-### Agent 主程式
+### Agent 主程式(未完成)
 Main.py
 
 
