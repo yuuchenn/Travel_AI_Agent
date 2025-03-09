@@ -1,0 +1,11 @@
+
+services:
+  app:
+    image: travel_agent:latest
+    stdin_open: true
+    tty: true
+    volumes:
+      - .:/app
+    environment:
+      - RAY_ADDRESS=ray:///host.docker.internal:10001
+    command: python Main.py
