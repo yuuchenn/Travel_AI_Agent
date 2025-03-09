@@ -18,7 +18,7 @@ ray.init(address="ray://host.docker.internal:10001", namespace="default")
 client = ray.get_actor("model_worker")
 
 BASE_URL = "https://k6oayrgulgb5sasvwj3tsy7l7u0tikfd.lambda-url.ap-northeast-1.on.aws/api/v3/tools"
-HEADERS = {"Authorization": "DhDkXZkGXaYBZhkk1Z9m9BuZDJGy"}
+HEADERS = {"Authorization": "Key"}
 # 旅宿
 @tool
 def get_taiwan_counties():
@@ -133,20 +133,19 @@ class State(BaseModel):
     messages: List[Dict] = Field(default_factory=list)
     hotel_recommendations: str = ""
     travel_plan: str = ""
+    analysis_report: str = ""
 
 # 解讀用戶需求agent
-class Primary(Runnable):
+class PrimaryAdvisor(Runnable):
     def invoke(self, state: State, config=None) -> State:
-        city = state.city
-        prompt = f"請推薦{city}的最佳飯店，考慮價格和評價"
-        #response = ray.get(client.text_generation(prompt, max_new_tokens=500))
+        user_query = state.messages[-1]["content"]
+        prompt = f"請解析以下需求，並提取城市、入住日期、退房日期、人數及預算：{user_query}"
         response = ray.get(client.generate.remote(prompt))
-        logger.info(f"Hotel Recommendations Generated: {response}")
-
-        # 更新狀態
-        state.hotel_recommendations = response
+        logger.info(f"Parsed user query: {response}")
+        
         state.messages.append({"role": "system", "content": response})
-        return state  # 回傳更新後的 State
+        return state
+
 
 
 # 旅館agent
@@ -163,10 +162,10 @@ class HotelAdvisor(Runnable):
         state.messages.append({"role": "system", "content": response})
         return state  # 回傳更新後的 State
     
-# 景點代理
+# 景點agent
 class TravelAdvisor(Runnable):
     def invoke(self, state: State, config=None) -> State:
-        user_query = state.messages[-1]["content"]
+        user_query = state.messages[-1].content
         prompt = f"請根據以下需求推薦旅遊地點：{user_query}"
         #response = ray.get(client.text_generation(prompt, max_new_tokens=500))
         response = ray.get(client.generate.remote(prompt))
@@ -176,40 +175,48 @@ class TravelAdvisor(Runnable):
         state.travel_plan = response
         state.messages.append({"role": "system", "content": response})
         return state  # 回傳更新後的 State
+# 匯總分析agent
+class AnalysisAdvisor(Runnable):
+    def invoke(self, state: State, config=None) -> State:
+        prompt = "請根據以下飯店及景點資訊，產生完整的旅遊分析報告：\n"
+        prompt += f"飯店推薦：{state.hotel_recommendations}\n"
+        prompt += f"旅遊規劃：{state.travel_plan}"
+        
+        response = ray.get(client.generate.remote(prompt))
+        logger.info(f"Generated Analysis Report: {response}")
+        
+        state.analysis_report = response
+        state.messages.append({"role": "system", "content": response})
+        return state
 
 
-# 初始化 Graph
 builder = StateGraph(State)
-
-# 添加 Agent 節點
-builder.add_node("hotel_advisor", HotelAdvisor())  
+builder.add_node("primary_advisor", PrimaryAdvisor())  
 builder.add_node("hotel_advisor", HotelAdvisor())  
 builder.add_node("travel_advisor", TravelAdvisor())  
+builder.add_node("analysis_advisor", AnalysisAdvisor())  
 
-# 設定起點和流程
-builder.add_edge(START, "hotel_advisor")  
+builder.add_edge(START, "primary_advisor")  
+builder.add_edge("primary_advisor", "hotel_advisor")  
+builder.add_edge("primary_advisor", "travel_advisor")  
+builder.add_edge("hotel_advisor", "analysis_advisor")  
+builder.add_edge("travel_advisor", "analysis_advisor")  
+builder.add_edge("analysis_advisor", END)
 
-builder.add_edge("hotel_advisor", "travel_advisor")  
-builder.add_edge("travel_advisor", END)  # 設定終點
-
-# 編譯 Graph
 graph = builder.compile()
 
-from IPython.display import Image, display
-
-display(Image(super_graph.get_graph().draw_mermaid_png()))
-
-
-# 測試執行
 if __name__ == "__main__":
     user_input = "我想去台中旅遊，住兩晚，3 個大人 2 個小孩，每天預算 5000 以內"
     initial_state = State(city="台中市", messages=[{"role": "user", "content": user_input}])
     
-    result = graph.invoke(initial_state)  # 傳入完整的 State 物件
-
+    result = graph.invoke(initial_state)
+    
     print("\n[住宿推薦]")
     print(result.hotel_recommendations if result.hotel_recommendations else "無法提供住宿資訊")
-
+    
     print("\n[旅遊規劃]")
     print(result.travel_plan if result.travel_plan else "無法提供建議")
     
+    print("\n[綜合分析報告]")
+    print(result.analysis_report if result.analysis_report else "無法產生報告")
+
