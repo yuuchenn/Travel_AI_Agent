@@ -138,12 +138,40 @@ class State(BaseModel):
 # 解讀用戶需求agent
 class PrimaryAdvisor(Runnable):
     def invoke(self, state: State, config=None) -> State:
-        user_query = state.messages[-1]["content"]
-        prompt = f"請解析以下需求，並提取城市、入住日期、退房日期、人數及預算：{user_query}"
+        user_query = state.messages[-1].content
+        prompt = prompt = f"""
+        請將以下用戶的旅遊需求轉換為 JSON 格式，**確保輸出只有 JSON**，不要包含任何額外的解釋或建議。
+
+        ### **JSON 輸出格式範例**
+        {{
+        "county": "台中市",
+        "check_in": "2025-01-01",
+        "check_out": "2025-01-03",
+        "adults": 3,
+        "children": 2,
+        "lowest_price": 1000,
+        "highest_price": 5000
+        }}
+
+        ---
+        **用戶需求：**
+        {user_query}
+
+        ⚠️ **請注意**
+        1. **請嚴格遵守 JSON 格式**，不得加入任何額外文字
+        2. **請直接輸出 JSON**，不要添加 Markdown 代碼塊 (例如 ```json )
+        """
         response = ray.get(client.generate.remote(prompt))
         logger.info(f"Parsed user query: {response}")
         
-        state.messages.append({"role": "system", "content": response})
+        # 假設解析結果返回一個 JSON 格式的資料，包含 city、budget 等資訊
+        parsed_data = eval(response)  # 請根據實際回應格式進行解析
+        state.city = parsed_data.get("city", state.city)
+        
+        # 使用 tools 來獲取額外的資訊
+        county_data = get_taiwan_counties()
+        state.messages.append({"role": "system", "content": f"獲取縣市數據: {county_data}"})
+        
         return state
 
 
